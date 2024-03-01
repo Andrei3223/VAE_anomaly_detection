@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from torch.utils.data import Dataset, DataLoader
 
 
@@ -19,10 +20,16 @@ class SwatDataset(Dataset):
                  feature_idx: list,
                  start_idx: int, 
                  end_idx: int, 
-                 windows_size: int,
-                 sliding:int=1):
-        data = np.load(path, allow_pickle=True).take(feature_idx, axis=1)[start_idx:end_idx]
-        self.data = data
+                 windows_size: int = 100,
+                 sliding:int=1,
+                 labels_path = None):
+        self.data = np.load(path, allow_pickle=True).take(feature_idx, axis=1)[start_idx:end_idx]
+        self.data = torch.Tensor(self.data)
+        if labels_path is not None:
+            labels = np.load(labels_path)[start_idx:end_idx]
+        else:
+            labels = None
+        self.labels = labels
         self.windows_size = windows_size
         self.sliding = sliding
 
@@ -37,4 +44,8 @@ class SwatDataset(Dataset):
         '''
         start = index * self.sliding
         end = index * self.sliding + self.windows_size
-        return self.data[start:end, :], self.data[end + 1, :]
+
+        if self.labels is None:
+            return self.data[start:end, :], []  # self.data[end+1, :]
+        else:
+            return self.data[start:end, :], self.labels[start:end]  # self.data[end+1, :],
