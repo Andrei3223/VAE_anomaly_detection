@@ -33,7 +33,7 @@ def training_epoch(model, optimizer, criterion, train_loader,
                     tqdm_desc, device='cpu', threshold=0.05):
     train_loss = 0.0
     POS_sum, NEG_sum = 0, 0
-    model.train()
+    # model.train()
     for feat, labels in tqdm(train_loader, desc=tqdm_desc):
         # print(feat.shape)
         feat = feat.to(device)
@@ -46,7 +46,7 @@ def training_epoch(model, optimizer, criterion, train_loader,
         loss.backward()
         optimizer.step()
 
-        full_loss = torch.nn.MSELoss(reduce=False)(res, feat)
+        full_loss = torch.nn.MSELoss(reduction='none')(res, feat)
         TP, TN, NEG = evaluate_loss(full_loss, labels)
         POS_sum += (TP + TN)
         NEG_sum += NEG

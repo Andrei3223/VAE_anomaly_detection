@@ -20,7 +20,7 @@ class SwatDataset(Dataset):
                  feature_idx: list,
                  start_idx: int, 
                  end_idx: int, 
-                 windows_size: int = 100,
+                 window_size: int = 100,
                  sliding:int=1,
                  labels_path = None):
         self.data = np.load(path, allow_pickle=True).take(feature_idx, axis=1)[start_idx:end_idx]
@@ -30,11 +30,11 @@ class SwatDataset(Dataset):
         else:
             labels = None
         self.labels = labels
-        self.windows_size = windows_size
+        self.window_size = window_size
         self.sliding = sliding
 
     def __len__(self):
-        return int((self.data.shape[0] - self.windows_size) / self.sliding) - 1
+        return int((self.data.shape[0] - self.window_size) / self.sliding) - 1
 
     def __getitem__(self, index):
         '''
@@ -43,7 +43,7 @@ class SwatDataset(Dataset):
             output: <np.array> [num_feature]
         '''
         start = index * self.sliding
-        end = index * self.sliding + self.windows_size
+        end = index * self.sliding + self.window_size
 
         if self.labels is None:
             return self.data[start:end, :], []  # self.data[end+1, :]
