@@ -7,8 +7,6 @@ from IPython.display import clear_output
 
 import wandb
 
-from sklearn.metrics import f1_score, accuracy_score
-
 
 def plot_losses(train_losses, test_losses, train_accuracies, test_accuracies):
     clear_output()
@@ -51,8 +49,8 @@ def training_epoch(model, optimizer, criterion, train_loader,
         train_loss += loss.item() * feat.shape[0]
 
     # print(train_loss)
-    train_loss /= len(train_loader.dataset)
-    acc /= len(train_loader.dataset)
+    train_loss /= len(train_loader)
+    acc /= len(train_loader)
 
     return train_loss, acc
 
@@ -95,11 +93,11 @@ def validation_epoch(model, criterion, test_loader,
 
 def train(model, optimizer, scheduler, criterion,
            train_loader, test_loader, num_epochs,
-            device='cpu', threshold=0.05):
+            device='cpu', threshold=0.1, start_epoch=1):
     train_losses, train_accuracies = [], []
     test_losses, test_accuracies = [], []
 
-    for epoch in range(1, num_epochs + 1):             # !!!!!!!
+    for epoch in range(start_epoch, start_epoch + num_epochs):
         train_loss, train_accuracy = training_epoch(
             model, optimizer, criterion, train_loader,
             tqdm_desc=f'Training {epoch}/{num_epochs}',
@@ -127,36 +125,36 @@ def train(model, optimizer, scheduler, criterion,
                     "train_acc": train_accuracy, "val_acc": test_accuracy})
         
 
-        plot_output(model, test_loader, epoch, device=device)
-        if epoch != 0 and epoch % 10 == 0:
-            torch.save(model.state_dict(), f'.\checkpoints\AE_{epoch - 1}e.pt')
+        plot_output(model, test_loader, device=device)
+        if epoch != 1 and (epoch - 1) % 4 == 0:
+            torch.save(model.state_dict(), f'.\checkpoints\{model.name}{epoch - 1}e.pt')
 
     return train_losses, test_losses, train_accuracies, test_accuracies
 
 
 @torch.no_grad()
-def evaluate_loss(loss, labels, thresh=0.05):
+def evaluate_loss(loss, labels, thresh=0.1):
     # print(loss.shape)
     loss_w = loss.mean(dim=2)
     predictions = np.float32(loss_w.cpu() > thresh)
-    if len(labels) == 0:  # train
+    if labels is None or len(labels) == 0:  # train
         labels = np.zeros(predictions.shape)
     else:
         labels = labels.cpu().numpy()
-    return (predictions == labels).sum(axis=1).mean()
+    return (predictions == labels).mean()
 
 
 @torch.no_grad()
 def get_series(model, test_loader,  device='cpu', threshold=0.1):
-    res_result = np.empty((64, 100, 19))
+    result = np.empty((64, 100, 19))
     for feat, labels in test_loader:
         feat = feat.to(device)
         labels = torch.Tensor(labels)
-        labels = labels.to(device)  # labels: batch_size
+        labels = labels.to(device)  # labels: batch_size * window
         
         pred = model(feat, feat).detach().cpu().numpy()
-        res_result = np.concatenate((res_result, pred), axis=0) 
-    return res_result
+        result = np.concatenate((result, pred), axis=0) 
+    return result
 
 def array_from_loader(loader):
     data_list = []
@@ -165,23 +163,26 @@ def array_from_loader(loader):
     return torch.cat(data_list).numpy()
 
 @torch.no_grad()
-def plot_output(model, loader, epoch, device='cpu', val_output=None):
+def plot_output(model, loader, device='cpu', output=None, param_dim=19, max_plots=7, input=None):
     clear_output()
-    if val_output is None:
-        val_output = get_series(model, loader,  device=device).reshape(-1, 19)
+    if output is None:
+        output = get_series(model, loader,  device=device).reshape(-1, param_dim)
     else:
-        val_output = val_output.reshape(-1, 19)
+        output = output.reshape(-1, param_dim)
 
-    val_input = array_from_loader(loader).reshape(-1, 19)
+    if input is None:
+        input = array_from_loader(loader).reshape(-1, param_dim)
+    
+    print("data is ready!")
 
-    num_plots = min(7, val_output.shape[1])
-    fig, axs = plt.subplots(2 * num_plots, 1, figsize =(10, 30))
+    num_plots = min(max_plots, output.shape[1])
+    fig, axs = plt.subplots(2 * num_plots, 1, figsize =(10, 50))
     fig.tight_layout()
     # wandb_dict = {}
     for i in range(num_plots):
-        axs[2*i+1].set_ylim([-20, 20])
-        axs[2*i].plot(val_input[:, i])
-        axs[2*i+1].plot(val_output[:, i])
+        axs[2*i+1].set_ylim([input[:, i].min() - 0.5, input[:, i].max() + 0.5])
+        axs[2*i].plot(input[90_000:100_000, i])
+        axs[2*i+1].plot(output[90_000:100_000, i])
 
         axs[2*i+1].set_title(f"AE output [{i}]", fontsize=7)
         axs[2*i].set_title(f"AE input [{i}]", fontsize=7)
