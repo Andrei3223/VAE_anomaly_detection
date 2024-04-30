@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 from tqdm.notebook import tqdm
 from IPython.display import clear_output
 
+import metrics_eval
+
 import wandb
 
 
@@ -28,7 +30,7 @@ def plot_losses(train_losses, test_losses, train_accuracies, test_accuracies):
     # print(f"Validation F1 score = {test_f1:.5f}")
 
 def training_epoch(model, optimizer, criterion, train_loader,
-                    tqdm_desc, device='cpu', threshold=0.05):
+                    tqdm_desc, device='cpu', threshold=None):
     train_loss = 0.0
     acc = 0
     model.train()
@@ -39,13 +41,16 @@ def training_epoch(model, optimizer, criterion, train_loader,
             labels = labels.to(device)
 
         optimizer.zero_grad()
-        res = model(feat, feat)  # src=tgt 
-        loss = criterion(res, feat)  # .mean()
+        res = model(feat, feat)      # src=tgt 
+        loss = criterion(res, feat)  # loss: double
         loss.backward()
         optimizer.step()
 
         full_loss = torch.nn.MSELoss(reduce=False)(res, feat)
-        acc  += evaluate_loss(full_loss, labels)
+        if threshold:
+            acc  += metrics_eval.get_accuracy(full_loss, labels, thresh=threshold)
+        else:
+            acc += metrics_eval.get_accuracy(full_loss, labels)
         train_loss += loss.item() * feat.shape[0]
 
     # print(train_loss)
@@ -57,10 +62,21 @@ def training_epoch(model, optimizer, criterion, train_loader,
 
 @torch.no_grad()
 def validation_epoch(model, criterion, test_loader,
-                      tqdm_desc, epoch, device='cpu', threshold=0.05):
+                      tqdm_desc, epoch, device='cpu', threshold=None):
+    '''
+    return: test_loss (mean loss) : double,
+            test_acc: int,
+            full_val_loss: np.array(len(test_loader) x bath_size x window x feat_dim)
+            full_labels:  len(test_loader) x batch_size x window
+    '''
     test_loss = 0.0
     acc = 0
-    # output = np.empty((64, 100, 19))
+
+    # full_val_loss = np.empty((64, 100, 19))
+    # full_labels = np.empty((64, 100))
+    full_val_loss = None
+    recons = None
+    # full_labels = None
 
     model.eval()
 
@@ -73,27 +89,37 @@ def validation_epoch(model, criterion, test_loader,
         loss = criterion(res, feat)
 
         full_loss = torch.nn.MSELoss(reduction='none')(res, feat)
-        acc  += evaluate_loss(full_loss, labels)
+        if threshold:
+            acc  += metrics_eval.get_accuracy(full_loss, labels, thresh=threshold)
+        else:
+            acc += metrics_eval.get_accuracy(full_loss, labels)
 
         test_loss += loss.item() * feat.shape[0]
 
-        # output = np.concatenate((output, res.detach().cpu().numpy()), axis=0)
+        if full_val_loss is None:
+            full_val_loss =  full_loss.detach().cpu().numpy()
+            recons = res.detach().cpu().numpy()
+            # full_labels = labels.detach().cpu().numpy()
+        else:
+            full_val_loss = np.concatenate((full_val_loss, full_loss.detach().cpu().numpy()), axis=0)
+            recons = np.concatenate((recons, res.detach().cpu().numpy()), axis=0)
+            # full_labels = np.concatenate((full_labels, labels.detach().cpu().numpy()), axis=0)
         
 
-    test_loss /= len(test_loader.dataset)
-    acc /= len(test_loader.dataset)
+    test_loss /= len(test_loader)
+    acc /= len(test_loader)
 
     # if (epoch - 1) % 5 == 0:
     #     plot_output(model, test_loader, epoch, device=device, val_output=output)
-    #     if epoch != 0:
-    #         torch.save(model.state_dict(), f'.\checkpoints\AE_{epoch - 1}e.pt')
 
-    return test_loss, acc
+    return test_loss, acc, full_val_loss, recons # full_labels
 
 
 def train(model, optimizer, scheduler, criterion,
            train_loader, test_loader, num_epochs,
-            device='cpu', threshold=0.1, start_epoch=1):
+            device='cpu', threshold=0.1, start_epoch=1,
+            save_checkpoints=False,
+            val_labels_path=None):
     train_losses, train_accuracies = [], []
     test_losses, test_accuracies = [], []
 
@@ -104,7 +130,8 @@ def train(model, optimizer, scheduler, criterion,
             device=device,
             threshold=threshold,
         )
-        test_loss, test_accuracy = validation_epoch(
+
+        test_loss, test_accuracy, full_test_loss, recons = validation_epoch(
             model, criterion, test_loader,
             tqdm_desc=f'Validating {epoch}/{num_epochs}',
             epoch=epoch,
@@ -119,15 +146,44 @@ def train(model, optimizer, scheduler, criterion,
         train_accuracies += [train_accuracy]
         test_losses += [test_loss]
         test_accuracies += [test_accuracy]
-        # test_f1_scores += [test_f1]
-        # plot_losses(train_losses, test_losses, train_accuracies, test_accuracies)
-        wandb.log({'train_loss': train_loss, 'val_loss': train_loss,
-                    "train_acc": train_accuracy, "val_acc": test_accuracy})
-        
 
-        plot_output(model, test_loader, device=device)
-        if epoch != 1 and (epoch - 1) % 4 == 0:
-            torch.save(model.state_dict(), f'.\checkpoints\{model.name}{epoch - 1}e.pt')
+        plot_output(model, test_loader, device=device, output=recons)
+
+        # print(full_test_loss.shape)
+        # full_test_loss = full_test_loss.reshape(-1, model.window_size)
+        # print(full_test_loss.shape)
+        # full_test_loss = np.mean(np.array(full_test_loss), axis=1)
+
+        assert np.sum(np.isnan(full_test_loss)) < 100
+        # print("val_loss shape: ", full_test_loss.shape, "contains nan", np.sum(np.isnan(full_test_loss)) > 0, np.sum(np.isnan(recons)) > 0)
+
+        if np.sum(np.isnan(full_test_loss)) > 0:
+            print(recons)
+        
+        loss_w = full_test_loss.mean(axis=2)
+        # print(loss_w.shape)
+        loss_w = loss_w.reshape(-1)
+        # print(loss_w.shape)
+
+
+        if save_checkpoints and epoch != 1 and epoch % 4 == 0:
+            torch.save(model.state_dict(), f'.\checkpoints\{model.name}{epoch - 1}e_AdamTransfSheduler_1.pt')
+        
+        test_labels = np.load(val_labels_path)
+
+        dict_wandb = {'train_loss': train_loss, 'val_loss': train_loss,
+                    "train_acc": train_accuracy, "val_acc": test_accuracy}
+        
+        # if (epoch - 1) % 1 == 0:  #!!!!!!!!!!!!!
+        if (epoch - 1) % 3 == 0: 
+            print(epoch, "evaluating")
+            val_results = metrics_eval.evaluate(loss_w, test_labels, validation_thresh=None)
+            dict_wandb = dict_wandb | val_results
+        
+        # print(dict_wandb)
+        
+        # raise RuntimeError("kek")
+        wandb.log(dict_wandb)        
 
     return train_losses, test_losses, train_accuracies, test_accuracies
 
@@ -146,15 +202,19 @@ def evaluate_loss(loss, labels, thresh=0.1):
 
 @torch.no_grad()
 def get_series(model, test_loader,  device='cpu', threshold=0.1):
-    result = np.empty((64, 100, 19))
-    for feat, labels in test_loader:
+    # result = np.empty((64, 100, 19))
+    result = None
+    for feat, _ in test_loader:
         feat = feat.to(device)
-        labels = torch.Tensor(labels)
-        labels = labels.to(device)  # labels: batch_size * window
         
         pred = model(feat, feat).detach().cpu().numpy()
-        result = np.concatenate((result, pred), axis=0) 
+
+        if result is None:
+            result = pred
+        else:
+            result = np.concatenate((result, pred), axis=0)
     return result
+
 
 def array_from_loader(loader):
     data_list = []
@@ -166,23 +226,25 @@ def array_from_loader(loader):
 def plot_output(model, loader, device='cpu', output=None, param_dim=19, max_plots=7, input=None):
     clear_output()
     if output is None:
-        output = get_series(model, loader,  device=device).reshape(-1, param_dim)
+        output = get_series(model, loader, device=device).reshape(-1, param_dim)
     else:
         output = output.reshape(-1, param_dim)
 
     if input is None:
         input = array_from_loader(loader).reshape(-1, param_dim)
     
-    print("data is ready!")
+    print(f"data is ready!")  # input shape = {input.shape}, output shape = {output.shape}
 
     num_plots = min(max_plots, output.shape[1])
     fig, axs = plt.subplots(2 * num_plots, 1, figsize =(10, 50))
     fig.tight_layout()
     # wandb_dict = {}
     for i in range(num_plots):
-        axs[2*i+1].set_ylim([input[:, i].min() - 0.5, input[:, i].max() + 0.5])
-        axs[2*i].plot(input[90_000:100_000, i])
-        axs[2*i+1].plot(output[90_000:100_000, i])
+        # axs[2*i+1].set_ylim([input[:, i].min() - 0.5, input[:, i].max() + 0.5])
+        axs[2*i+1].set_ylim([input[:, i].min(), input[:, i].max()])
+
+        axs[2*i].plot(input[10_000:100_000, i]) # 10_000:100_000
+        axs[2*i+1].plot(output[10_000:100_000, i])
 
         axs[2*i+1].set_title(f"AE output [{i}]", fontsize=7)
         axs[2*i].set_title(f"AE input [{i}]", fontsize=7)

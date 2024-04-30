@@ -110,11 +110,11 @@ class TransformerBasicv2Scaling(nn.Module):
 		self.lr = lr
 		self.batch = 128
 		self.n_feats = feats
-		self.n_window = window_size
+		self.window_size = window_size
 		self.scale = 16
 		self.linear_layer = nn.Linear(feats, self.scale*feats)
 		self.output_layer = nn.Linear(self.scale*feats, feats)
-		self.pos_encoder = PositionalEncoding(self.scale*feats, 0.1, self.n_window, batch_first=True)
+		self.pos_encoder = PositionalEncoding(self.scale*feats, 0.1, self.window_size, batch_first=True)
 		encoder_layers = TransformerEncoderLayer(d_model=feats*self.scale, nhead=feats, batch_first=True, dim_feedforward=256, dropout=0.1)
 		self.transformer_encoder = TransformerEncoder(encoder_layers, 1)
 		decoder_layers = TransformerDecoderLayer(d_model=feats*self.scale, nhead=feats, batch_first=True, dim_feedforward=256, dropout=0.1)
@@ -144,11 +144,11 @@ class TransformerBasicBottleneck(nn.Module):
 		super(TransformerBasicBottleneck, self).__init__()
 		self.name = 'TransformerBasicBottleneck'
 		self.n_feats = feats
-		self.n_window = window_size
+		self.window_size = window_size
 		self.scale = 16
 		self.linear_layer = nn.Linear(feats, self.scale*feats)
 		self.output_layer = nn.Linear(self.scale*feats, feats)
-		self.pos_encoder = PositionalEncoding(self.scale*feats, 0.1, self.n_window, batch_first=True)
+		self.pos_encoder = PositionalEncoding(self.scale*feats, 0.1, self.window_size, batch_first=True)
 		encoder_layers = TransformerEncoderLayer(d_model=feats*self.scale, nhead=feats,
 										    batch_first=True, dim_feedforward=256, dropout=0.1)
 		self.transformer_encoder = TransformerEncoder(encoder_layers, 1)
@@ -180,11 +180,11 @@ class TransformerBasicBottleneckScaling(nn.Module):
 		super(TransformerBasicBottleneckScaling, self).__init__()
 		self.name = 'TransformerBasicBottleneckScaling'
 		self.n_feats = feats
-		self.n_window = window_size
+		self.window_size = window_size
 		self.scale = 16
 		self.linear_layer = nn.Linear(feats, self.scale*feats)
 		self.output_layer = nn.Linear(self.scale*feats, feats)
-		self.pos_encoder = PositionalEncoding(self.scale*feats, 0.1, self.n_window, batch_first=True)
+		self.pos_encoder = PositionalEncoding(self.scale*feats, 0.1, self.window_size, batch_first=True)
 		encoder_layers = TransformerEncoderLayer(d_model=feats*self.scale, nhead=feats,
 										    batch_first=True, dim_feedforward=256, dropout=0.1) 
 		self.transformer_encoder = TransformerEncoder(encoder_layers, 1)
@@ -216,11 +216,11 @@ class TransformerBasicBottleneckScalingNoAct(nn.Module):
 		super(TransformerBasicBottleneckScalingNoAct, self).__init__()
 		self.name = 'AE_no_act'
 		self.n_feats = feats
-		self.n_window = window_size
+		self.window_size = window_size
 		self.scale = 16
 		self.linear_layer = nn.Linear(feats, self.scale*feats)
 		self.output_layer = nn.Linear(self.scale*feats, feats)
-		self.pos_encoder = PositionalEncoding(self.scale*feats, 0.1, self.n_window, batch_first=True)
+		self.pos_encoder = PositionalEncoding(self.scale*feats, 0.1, self.window_size, batch_first=True)
 		encoder_layers = TransformerEncoderLayer(d_model=feats*self.scale, nhead=feats,
 										    batch_first=True, dim_feedforward=256, dropout=0.1) 
 		self.transformer_encoder = TransformerEncoder(encoder_layers, 1)
