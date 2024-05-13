@@ -181,7 +181,7 @@ class TransformerBasicBottleneckScaling(nn.Module):
 		self.name = 'TransformerBasicBottleneckScaling'
 		self.n_feats = feats
 		self.window_size = window_size
-		self.scale = 16
+		self.scale = 3
 		self.linear_layer = nn.Linear(feats, self.scale*feats)
 		self.output_layer = nn.Linear(self.scale*feats, feats)
 		self.pos_encoder = PositionalEncoding(self.scale*feats, 0.1, self.window_size, batch_first=True)
@@ -210,6 +210,19 @@ class TransformerBasicBottleneckScaling(nn.Module):
 		x = self.output_layer(x)
 		x = self.fcn(x)
 		return x
+	
+	@torch.no_grad()
+	def get_latent_embedding(self, src):
+		model_dim = self.scale * self.n_feats
+
+		src = self.linear_layer(src)
+		src = src * np.sqrt(model_dim)
+		src = self.pos_encoder(src)
+		# batch x t x d
+		memory = self.transformer_encoder(src) 
+		# batch x 1 x d
+		return torch.mean(memory, dim=1, keepdim=True)
+
 
 class TransformerBasicBottleneckScalingNoAct(nn.Module):
 	def __init__(self, feats, window_size):
@@ -247,13 +260,13 @@ class TransformerBasicBottleneckScalingNoAct(nn.Module):
 		return x
 	
 
-class VAE_act(nn.Module):
+class VAE_scale_act(nn.Module):
 	def __init__(self, feats, window_size):
-		super(VAE_act, self).__init__()
-		self.name = 'VAE_act'
+		super(VAE_scale_act, self).__init__()
+		self.name = 'VAE_scale_act'
 		self.n_feats = feats
 		self.window_size = window_size
-		self.scale = 16
+		self.scale = 8
 		self.linear_layer = nn.Linear(feats, self.scale*feats)
 		self.output_layer = nn.Linear(self.scale*feats, feats)
 		self.pos_encoder = PositionalEncoding(self.scale*feats, 0.1, self.window_size, batch_first=True)
@@ -291,8 +304,304 @@ class VAE_act(nn.Module):
 		mean = self.mean(hidden)
 		logvar = self.logvar(hidden)
 
+		return mean
+
+
+	def forward(self, src, tgt):
+		batch_size = src.shape[0]
+
+		model_dim = self.scale * self.n_feats
+
+		# Encoder
+		src = self.linear_layer(src)
+		src = src * np.sqrt(model_dim)
+		src = self.pos_encoder(src)
+		memory = self.transformer_encoder(src)
+
+		hidden = memory.view(batch_size, -1)
+		mean = self.mean(hidden)
+		logvar = self.logvar(hidden)
+
+		z = self.reparametrize(mean, logvar)
+		z = z.reshape(batch_size, 1, -1)
+
+		# Decoder
+		tgt = self.linear_layer(tgt)
+		tgt = tgt * np.sqrt(model_dim)
+
+		x = self.transformer_decoder(tgt, z)
+		x = self.output_layer(x)
+		x = self.fcn(x)
+		return x, mean, logvar
+	
+
+class VAE_act(nn.Module):
+	def __init__(self, feats, window_size):
+		super(VAE_act, self).__init__()
+		self.name = 'VAE_act'
+		self.n_feats = feats
+		self.window_size = window_size
+		self.linear_layer = nn.Linear(feats, feats)
+		self.output_layer = nn.Linear(feats, feats)
+		self.pos_encoder = PositionalEncoding(feats, 0.1, self.window_size, batch_first=True)
+		encoder_layers = TransformerEncoderLayer(d_model=feats, nhead=feats,
+										    batch_first=True, dim_feedforward=256, dropout=0.1) 
+		self.transformer_encoder = TransformerEncoder(encoder_layers, 1)
+		decoder_layers = TransformerDecoderLayer(d_model=feats, nhead=feats, batch_first=True, dim_feedforward=256, dropout=0.1)
+		self.transformer_decoder = TransformerDecoder(decoder_layers, 1)
+		self.fcn = nn.Sigmoid()
+
+		self.mean = nn.Linear(window_size * feats, feats)
+		self.logvar = nn.Linear(window_size * feats, feats)
+		# self.linear_after_latent = nn.Linear(feats // 2, feats)
+	
+	@staticmethod
+	def reparametrize(mu, logvar):
+		std = torch.exp(0.5*logvar)
+		eps = torch.randn_like(std)
+		return mu + eps*std
+	
+	@torch.no_grad()
+	def get_latent_embedding(self, src):
+		batch_size = src.shape[0]
+
+		model_dim = self.n_feats
+
+		src = self.linear_layer(src)
+		src = src * np.sqrt(model_dim)
+		src = self.pos_encoder(src)
+		# batch x t x d
+		memory = self.transformer_encoder(src)
+
+		hidden = memory.view(batch_size, -1)
+		mean = self.mean(hidden)
+
+		logvar = self.logvar(hidden)
+
 		return self.reparametrize(mean, logvar)
 
+	def forward(self, src, tgt):
+		batch_size = src.shape[0]
+
+		model_dim = self.n_feats
+
+		# Encoder
+		src = self.linear_layer(src)
+		src = src * np.sqrt(model_dim)
+		src = self.pos_encoder(src)
+		memory = self.transformer_encoder(src)
+
+		hidden = memory.view(batch_size, -1)
+		mean = self.mean(hidden)
+		logvar = self.logvar(hidden)
+
+		z = self.reparametrize(mean, logvar)
+
+		# z = self.linear_after_latent(z)
+		z = z.reshape(batch_size, 1, -1)
+
+		# Decoder
+		tgt = self.linear_layer(tgt)
+		tgt = tgt * np.sqrt(model_dim)
+
+		x = self.transformer_decoder(tgt, z)
+		x = self.output_layer(x)
+		x = self.fcn(x)
+		return x, mean, logvar
+	
+
+
+class VAE_no_act(nn.Module):
+	def __init__(self, feats, window_size):
+		super(VAE_no_act, self).__init__()
+		self.name = 'VAE_no_act'
+		self.n_feats = feats
+		self.window_size = window_size
+		self.linear_layer = nn.Linear(feats, feats)
+		self.output_layer = nn.Linear(feats, feats)
+		self.pos_encoder = PositionalEncoding(feats, 0.1, self.window_size, batch_first=True)
+		encoder_layers = TransformerEncoderLayer(d_model=feats, nhead=feats,
+										    batch_first=True, dim_feedforward=256, dropout=0.1) 
+		self.transformer_encoder = TransformerEncoder(encoder_layers, 1)
+		decoder_layers = TransformerDecoderLayer(d_model=feats, nhead=feats, batch_first=True, dim_feedforward=256, dropout=0.1)
+		self.transformer_decoder = TransformerDecoder(decoder_layers, 1)
+		# self.fcn = nn.Sigmoid()
+
+		self.mean = nn.Linear(window_size * feats, feats)
+		self.logvar = nn.Linear(window_size * feats, feats)
+		# self.linear_after_latent = nn.Linear(feats // 2, feats)
+	
+	@staticmethod
+	def reparametrize(mu, logvar):
+		std = torch.exp(0.5*logvar)
+		eps = torch.randn_like(std)
+		return mu + eps*std
+	
+	@torch.no_grad()
+	def get_latent_embedding(self, src):
+		batch_size = src.shape[0]
+
+		model_dim = self.n_feats
+
+		src = self.linear_layer(src)
+		src = src * np.sqrt(model_dim)
+		src = self.pos_encoder(src)
+		# batch x t x d
+		memory = self.transformer_encoder(src)
+
+		hidden = memory.view(batch_size, -1)
+		mean = self.mean(hidden)
+		return mean
+		# logvar = self.logvar(hidden)
+
+		# return self.reparametrize(mean, logvar)
+
+	def forward(self, src, tgt):
+		batch_size = src.shape[0]
+
+		model_dim = self.n_feats
+
+		# Encoder
+		src = self.linear_layer(src)
+		src = src * np.sqrt(model_dim)
+		src = self.pos_encoder(src)
+		memory = self.transformer_encoder(src)
+
+		hidden = memory.view(batch_size, -1)
+		mean = self.mean(hidden)
+		logvar = self.logvar(hidden)
+
+		z = self.reparametrize(mean, logvar)
+
+		# z = self.linear_after_latent(z)
+		z = z.reshape(batch_size, 1, -1)
+
+		# Decoder
+		tgt = self.linear_layer(tgt)
+		tgt = tgt * np.sqrt(model_dim)
+
+		x = self.transformer_decoder(tgt, z)
+		x = self.output_layer(x)
+		# x = self.fcn(x)
+		return x, mean, logvar
+	
+
+class VAE_scale_no_act(nn.Module):
+	def __init__(self, feats, window_size):
+		super(VAE_scale_no_act, self).__init__()
+		self.name = 'VAE_scale_no_act'
+		self.n_feats = feats
+		self.window_size = window_size
+		self.scale = 16
+		self.linear_layer = nn.Linear(feats, self.scale*feats)
+		self.output_layer = nn.Linear(self.scale*feats, feats)
+		self.pos_encoder = PositionalEncoding(self.scale*feats, 0.1, self.window_size, batch_first=True)
+		encoder_layers = TransformerEncoderLayer(d_model=feats*self.scale, nhead=feats,
+										    batch_first=True, dim_feedforward=256, dropout=0.1) 
+		self.transformer_encoder = TransformerEncoder(encoder_layers, 1)
+		decoder_layers = TransformerDecoderLayer(d_model=feats*self.scale, nhead=feats, batch_first=True, dim_feedforward=256, dropout=0.1)
+		self.transformer_decoder = TransformerDecoder(decoder_layers, 1)
+		self.fcn = nn.Sigmoid()
+
+		self.mean = nn.Linear(window_size * feats * self.scale, feats * self.scale)
+
+		self.logvar = nn.Linear(window_size * feats * self.scale, feats * self.scale)
+	
+	@staticmethod
+	def reparametrize(mu, logvar):
+		std = torch.exp(0.5*logvar)
+		eps = torch.randn_like(std)
+		return mu + eps*std
+	
+	@torch.no_grad()
+	def get_latent_embedding(self, src):
+		batch_size = src.shape[0]
+
+		model_dim = self.scale * self.n_feats
+
+		src = self.linear_layer(src)
+		src = src * np.sqrt(model_dim)
+		src = self.pos_encoder(src)
+		# batch x t x d
+		memory = self.transformer_encoder(src)
+
+		hidden = memory.view(batch_size, -1)
+		mean = self.mean(hidden)
+		return mean
+		# logvar = self.logvar(hidden)
+
+		# return self.reparametrize(mean, logvar)
+
+	def forward(self, src, tgt):
+		batch_size = src.shape[0]
+
+		model_dim = self.scale * self.n_feats
+
+		# Encoder
+		src = self.linear_layer(src)
+		src = src * np.sqrt(model_dim)
+		src = self.pos_encoder(src)
+		memory = self.transformer_encoder(src)
+
+		hidden = memory.view(batch_size, -1)
+		mean = self.mean(hidden)
+		logvar = self.logvar(hidden)
+
+		z = self.reparametrize(mean, logvar)
+		z = z.reshape(batch_size, 1, -1)
+
+		# Decoder
+		tgt = self.linear_layer(tgt)
+		tgt = tgt * np.sqrt(model_dim)
+
+		x = self.transformer_decoder(tgt, z)
+		x = self.output_layer(x)
+		return x, mean, logvar
+
+    
+class VAE_scale_act(nn.Module):
+	def __init__(self, feats, window_size):
+		super(VAE_scale_act, self).__init__()
+		self.name = 'VAE_scale_act'
+		self.n_feats = feats
+		self.window_size = window_size
+		self.scale = 16
+		self.linear_layer = nn.Linear(feats, self.scale*feats)
+		self.output_layer = nn.Linear(self.scale*feats, feats)
+		self.pos_encoder = PositionalEncoding(self.scale*feats, 0.1, self.window_size, batch_first=True)
+		encoder_layers = TransformerEncoderLayer(d_model=feats*self.scale, nhead=feats,
+										    batch_first=True, dim_feedforward=256, dropout=0.1) 
+		self.transformer_encoder = TransformerEncoder(encoder_layers, 1)
+		decoder_layers = TransformerDecoderLayer(d_model=feats*self.scale, nhead=feats, batch_first=True, dim_feedforward=256, dropout=0.1)
+		self.transformer_decoder = TransformerDecoder(decoder_layers, 1)
+
+		self.mean = nn.Linear(window_size * feats * self.scale, feats * self.scale)
+
+		self.logvar = nn.Linear(window_size * feats * self.scale, feats * self.scale)
+	
+	@staticmethod
+	def reparametrize(mu, logvar):
+		std = torch.exp(0.5*logvar)
+		eps = torch.randn_like(std)
+		return mu + eps*std
+	
+	@torch.no_grad()
+	def get_latent_embedding(self, src):
+		batch_size = src.shape[0]
+
+		model_dim = self.scale * self.n_feats
+
+		src = self.linear_layer(src)
+		src = src * np.sqrt(model_dim)
+		src = self.pos_encoder(src)
+		# batch x t x d
+		memory = self.transformer_encoder(src)
+
+		hidden = memory.view(batch_size, -1)
+		mean = self.mean(hidden)
+		# logvar = self.logvar(hidden)
+
+		return mean
 
 	def forward(self, src, tgt):
 		batch_size = src.shape[0]

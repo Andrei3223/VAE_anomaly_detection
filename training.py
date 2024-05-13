@@ -10,7 +10,7 @@ import metrics_eval
 import wandb
 
 
-def plot_losses(train_losses, test_losses, train_accuracies, test_accuracies):
+def plot_losses(train_losses, test_losses, train_accuracies, test_accuracies):  # better use wandb
     clear_output()
     fig, axs = plt.subplots(1, 2, figsize=(13, 4))  
     axs[0].plot(range(1, len(train_losses) + 1), train_losses, label='train')
@@ -26,8 +26,6 @@ def plot_losses(train_losses, test_losses, train_accuracies, test_accuracies):
         ax.legend()
 
     plt.show()
-    # print(train_losses, test_losses)
-    # print(f"Validation F1 score = {test_f1:.5f}")
 
 
 def training_epoch(model, optimizer, criterion, train_loader,
@@ -43,7 +41,7 @@ def training_epoch(model, optimizer, criterion, train_loader,
 
         optimizer.zero_grad()
         res = model(feat, feat)      # src=tgt 
-        loss = criterion(res, feat)  # loss: double
+        loss = criterion(res, feat)  # loss: float
         loss.backward()
         optimizer.step()
 
@@ -54,7 +52,6 @@ def training_epoch(model, optimizer, criterion, train_loader,
             acc += metrics_eval.get_accuracy(full_loss, labels)
         train_loss += loss.item() * feat.shape[0]
 
-    # print(train_loss)
     train_loss /= len(train_loader)
     acc /= len(train_loader)
 
@@ -84,14 +81,12 @@ def train_vae_epoch(model, optimizer, train_loader,
         loss = mse_loss + kld_loss
         loss.backward()
 
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
+        # torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
 
         train_loss += loss.item()
         train_mse += mse_loss.item()
         train_kld += kld_loss.item()
         optimizer.step()
-
-        # train_loss += loss.item() * feat.shape[0]
 
     train_loss /= len(train_loader)
     train_mse /= len(train_loader)
@@ -136,19 +131,14 @@ def validation_vae_epoch(model, criterion, test_loader,
 def validation_epoch(model, criterion, test_loader,
                       tqdm_desc, epoch, device='cpu', threshold=None):
     '''
-    return: test_loss (mean loss) : double,
-            test_acc: int,
-            full_val_loss: np.array(len(test_loader) x bath_size x window x feat_dim)
-            full_labels:  len(test_loader) x batch_size x window
+    return: test_loss (mean loss) : float,
+            test_acc: float,
+            full_val_loss: np.array((len(test_loader) * bath_size) x window x feat_dim)
     '''
     test_loss = 0.0
     acc = 0
-
-    # full_val_loss = np.empty((64, 100, 19))
-    # full_labels = np.empty((64, 100))
     full_val_loss = None
     recons = None
-    # full_labels = None
 
     model.eval()
 
@@ -172,27 +162,22 @@ def validation_epoch(model, criterion, test_loader,
         if full_val_loss is None:
             full_val_loss =  full_loss.detach().cpu().numpy()
             recons = res.detach().cpu().numpy()
-            # full_labels = labels.detach().cpu().numpy()
         else:
             full_val_loss = np.concatenate((full_val_loss, full_loss.detach().cpu().numpy()), axis=0)
-            recons = np.concatenate((recons, res.detach().cpu().numpy()), axis=0)
-            # full_labels = np.concatenate((full_labels, labels.detach().cpu().numpy()), axis=0)
-        
+            recons = np.concatenate((recons, res.detach().cpu().numpy()), axis=0)        
 
     test_loss /= len(test_loader)
     acc /= len(test_loader)
 
-    # if (epoch - 1) % 5 == 0:
-    #     plot_output(model, test_loader, epoch, device=device, val_output=output)
-
-    return test_loss, acc, full_val_loss, recons # full_labels
+    return test_loss, acc, full_val_loss, recons
 
 
 def train_vae(model, optimizer, scheduler, criterion,
            train_loader, test_loader, num_epochs,
             device='cpu', threshold=0.1, start_epoch=1,
             save_checkpoints=False,
-            val_labels_path=None):
+            val_labels_path=None,
+            name_post=""):
     train_losses, test_losses = [], []
 
     for epoch in range(start_epoch, start_epoch + num_epochs):
@@ -218,20 +203,20 @@ def train_vae(model, optimizer, scheduler, criterion,
         train_losses += [train_loss]
         test_losses += [test_loss]
 
-        plot_output(model, test_loader, device=device, output=recons)
+        plot_output(model, test_loader, device=device, output=recons,  param_dim=recons.shape[-1])
 
         assert np.sum(np.isnan(full_test_loss)) < 100
         loss_w = full_test_loss.mean(axis=2)
         loss_w = loss_w.reshape(-1)
 
-        if save_checkpoints and epoch != 1 and epoch % 4 == 0:
-            torch.save(model.state_dict(), f'.\checkpoints\{model.name}{epoch - 1}e.pt')
+        if save_checkpoints and epoch != 1 and epoch % 10 == 0:
+            torch.save(model.state_dict(), f'.\checkpoints\{model.name}{epoch - 1}e_{name_post}.pt')
         
         test_labels = np.load(val_labels_path)
 
         dict_wandb = {'train_loss': train_loss, 'val_loss': train_loss}
 
-        if (epoch - 1) % 3 == 0: 
+        if (epoch - 1) % 5 == 0: 
             print(epoch, "evaluating")
             val_results = metrics_eval.evaluate(loss_w, test_labels, validation_thresh=None)
             dict_wandb = dict_wandb | val_results
@@ -241,13 +226,12 @@ def train_vae(model, optimizer, scheduler, criterion,
     return train_losses, test_losses
 
 
-
-
 def train(model, optimizer, scheduler, criterion,
            train_loader, test_loader, num_epochs,
             device='cpu', threshold=0.1, start_epoch=1,
             save_checkpoints=False,
-            val_labels_path=None):
+            val_labels_path=None,
+            name_post=""):
     train_losses, train_accuracies = [], []
     test_losses, test_accuracies = [], []
 
@@ -277,13 +261,7 @@ def train(model, optimizer, scheduler, criterion,
 
         plot_output(model, test_loader, device=device, output=recons, param_dim=recons.shape[-1])
 
-        # print(full_test_loss.shape)
-        # full_test_loss = full_test_loss.reshape(-1, model.window_size)
-        # print(full_test_loss.shape)
-        # full_test_loss = np.mean(np.array(full_test_loss), axis=1)
-
         assert np.sum(np.isnan(full_test_loss)) < 100
-        # print("val_loss shape: ", full_test_loss.shape, "contains nan", np.sum(np.isnan(full_test_loss)) > 0, np.sum(np.isnan(recons)) > 0)
 
         if np.sum(np.isnan(full_test_loss)) > 0:
             print(recons)
@@ -294,23 +272,19 @@ def train(model, optimizer, scheduler, criterion,
         # print(loss_w.shape)
 
 
-        if save_checkpoints and epoch != 1 and epoch % 4 == 0:
-            torch.save(model.state_dict(), f'.\checkpoints\{model.name}{epoch - 1}e_AdamTransfSheduler_allfeat.pt')
+        if save_checkpoints and epoch != 1 and epoch % 10 == 0:
+            torch.save(model.state_dict(), f'.\checkpoints\{model.name}{epoch - 1}e_{name_post}.pt')
         
         test_labels = np.load(val_labels_path)
 
         dict_wandb = {'train_loss': train_loss, 'val_loss': train_loss,
                     "train_acc": train_accuracy, "val_acc": test_accuracy}
         
-        # if (epoch - 1) % 1 == 0:  #!!!!!!!!!!!!!
-        if (epoch - 1) % 3 == 0: 
+        if (epoch - 1) % 4 == 0: 
             print(epoch, "evaluating")
             val_results = metrics_eval.evaluate(loss_w, test_labels, validation_thresh=None)
             dict_wandb = dict_wandb | val_results
         
-        # print(dict_wandb)
-        
-        # raise RuntimeError("kek")
         wandb.log(dict_wandb)        
 
     return train_losses, test_losses, train_accuracies, test_accuracies
@@ -319,7 +293,6 @@ def train(model, optimizer, scheduler, criterion,
 
 @torch.no_grad()
 def evaluate_loss(loss, labels, thresh=0.1):
-    # print(loss.shape)
     loss_w = loss.mean(dim=2)
     predictions = np.float32(loss_w.cpu() > thresh)
     if labels is None or len(labels) == 0:  # train
@@ -331,7 +304,6 @@ def evaluate_loss(loss, labels, thresh=0.1):
 
 @torch.no_grad()
 def get_series(model, test_loader,  device='cpu'):
-    # result = np.empty((64, 100, 19))
     result = None
     for feat, _ in test_loader:
         feat = feat.to(device)
@@ -352,10 +324,13 @@ def array_from_loader(loader):
         data_list.append(inputs)
     return torch.cat(data_list).numpy()
 
+
 @torch.no_grad()
 def plot_output(model, loader, device='cpu', output=None,
                  param_dim=19, max_plots=7,
-                   input=None, model_name="AE"):
+                   input=None, model_name="AE",
+                   begin_idx=0, end_idx=-1,
+                   labels=None):
     clear_output()
     if output is None:
         output = get_series(model, loader, device=device).reshape(-1, param_dim)
@@ -365,27 +340,31 @@ def plot_output(model, loader, device='cpu', output=None,
     if input is None:
         input = array_from_loader(loader).reshape(-1, param_dim)
     
-    print(f"data is ready!")  # input shape = {input.shape}, output shape = {output.shape}
+    print(f"data is ready!")
 
     num_plots = min(max_plots, output.shape[1])
-    fig, axs = plt.subplots(2 * num_plots, 1, figsize =(10, 50))
+    fig, axs = plt.subplots(2 * num_plots, 1, figsize =(10, num_plots*3))
     fig.tight_layout()
     # wandb_dict = {}
     for i in range(num_plots):
         # axs[2*i+1].set_ylim([input[:, i].min() - 0.5, input[:, i].max() + 0.5])
         axs[2*i+1].set_ylim([input[:, i].min(), input[:, i].max()])
 
-        axs[2*i].plot(input[:, i]) # 10_000:100_000
-        axs[2*i+1].plot(output[:, i])
+        axs[2*i].plot(input[begin_idx:end_idx, i])
+
+        if labels is not None:  # To show the anomaly points
+            one_idx = np.where(np.diff(labels, prepend=0) == 1)[0]
+            zero_idx = np.where(np.diff(labels, prepend=0) == -1)[0]  # len(one_idx) == len(zero_idx), else error
+            for j in range(len(one_idx)):
+                st = one_idx[j]
+                end = zero_idx[j]
+                axs[2*i].plot(np.arange(st, end), input[st:end, i], color="red")
+
+        axs[2*i+1].plot(output[begin_idx:end_idx, i])
 
         axs[2*i+1].set_title(f"{model_name} output [{i}]", fontsize=7)
         axs[2*i].set_title(f"input [{i}]", fontsize=7)
 
-        # wandb_dict[f'input[{i}]'] = val_input[:, i]
-        # wandb_dict[f'output[{i}]'] = np.where(((val_output[:, i] > 10) | (val_output[:, i] < -10)), 3, val_output[:, i])
-
-    # wandb.log(wandb_dict)
-    # fig.savefig(f'{epoch}e_output')
     plt.show()
 
      

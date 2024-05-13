@@ -47,8 +47,6 @@ def pak(scores, targets, thres, k=20):
     predicts = scores > thres
     actuals = targets > 0.01
 
-    # print(np.diff(actuals, prepend=0))
-
     one_start_idx = np.where(np.diff(actuals, prepend=0) == 1)[0]
     zero_start_idx = np.where(np.diff(actuals, prepend=0) == -1)[0]
 
@@ -80,8 +78,6 @@ def pak_protocol(scores, labels, threshold, max_k=100):
         fpr, tpr = get_fp_tp_rate(adjusted_preds, labels)
         fprs.append(fpr)
         tprs.append(tpr)
-        #print(f1)   
-        #print(k)
         f1s.append(f1)
         preds.append(adjusted_preds)
 
@@ -89,10 +85,6 @@ def pak_protocol(scores, labels, threshold, max_k=100):
     max_f1_k = max(f1s)
     k_max = f1s.index(max_f1_k)
     preds_for_max = preds[f1s.index(max_f1_k)]
-    # import matplotlib.pyplot as plt
-    # plt.cla()
-    # plt.plot(ks, f1s)
-    # plt.savefig('DiffusionAE/plots/PAK_PROTOCOL')
     #print(f'AREA UNDER CURVE {area}')
     return area_under_f1, max_f1_k, k_max, preds_for_max, fprs, tprs
 
@@ -118,7 +110,7 @@ def evaluate(score, label, validation_thresh=None):
 
     assert score is not np.nan
     # thresholds = np.arange(0, score.max(), min(0.001, score.max()/50))#0.001
-    # print(score.max())
+    print("max loss score:", score.max())
 
     thresholds = np.arange(0, score.max(), score.max()/50)
 
@@ -148,9 +140,6 @@ def evaluate(score, label, validation_thresh=None):
         best_thresh = thresholds[f1s.index(f1)]
     
     roc_max = metrics.auc(np.transpose(false_pos_rates)[max_k], np.transpose(true_pos_rates)[max_k])
-    #np.save('/root/Diff-Anomaly/DiffusionAE/plots_for_paper/fprs_diff_score_pa.npy', np.transpose(false_pos_rates)[0])
-    #np.save('/root/Diff-Anomaly/DiffusionAE/plots_for_paper/tprs_diff_score_pa.npy', np.transpose(true_pos_rates)[0])
-    
     false_pos_rates = np.array(false_pos_rates).flatten()
     true_pos_rates = np.array(true_pos_rates).flatten()
 
@@ -160,10 +149,6 @@ def evaluate(score, label, validation_thresh=None):
     pairs = np.array(pairs)[sorted_indexes]
     roc_score = metrics.auc(false_pos_rates, true_pos_rates)
 
-    #np.save('/root/Diff-Anomaly/DiffusionAE/plots_for_paper/tprs_diff_score.npy', true_pos_rates)
-    #np.save('/root/Diff-Anomaly/DiffusionAE/plots_for_paper/fprs_diff_score.npy', false_pos_rates)
-    #np.save('/root/Diff-Anomaly/DiffusionAE/plots_for_paper/pairs_diff_score.npy', pairs)
-    #preds = predictions[f1s.index(f1)]
     if validation_thresh:
         return {
             'f1': f1,   # f1_k(area under f1) for validation threshold
@@ -184,4 +169,4 @@ def evaluate(score, label, validation_thresh=None):
             'thresh_max': thresh_max_f1, 
             # 'preds': best_preds,
             'k': max_k,
-        }  # , false_pos_rates, true_pos_rates
+        } 
